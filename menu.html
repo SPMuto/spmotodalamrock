@@ -5454,1708 +5454,731 @@ body {
 </div>
 
 
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+<script src="js/config.js"></script>
+
 <!-- =======================================================
-     BAHAGIAN 6 JAVASCRIPT AKAN MASUK DI SINI
+     SPMDR POS + SUPABASE
 ======================================================== -->  
 
 <script>
 /* =========================================================
-   BAHAGIAN 6
-   JAVASCRIPT POS SPAREPART
+   SPMDR - SPAREPART POS + SUPABASE
+   Produk + Pelanggan + Jualan + Jualan Detail + Stok
 ========================================================= */
 
-document.addEventListener("DOMContentLoaded", function () {
+const SUPABASE_READY = typeof supabaseClient !== "undefined";
 
-    /* =====================================================
-       ELEMENTS
-    ===================================================== */
+let db = SUPABASE_READY ? supabaseClient : null;
+let semuaProduk = [];
+let semuaPelanggan = [];
+let cart = [];
+let activeCategory = "semua";
+let discount = 0;
+let selectedPaymentMethod = "cash";
+let currentTransaction = 1;
 
-    const productCards = Array.from(
-        document.querySelectorAll(".product-card")
-    );
+/* =========================================================
+   DOM
+========================================================= */
+const productGrid = document.getElementById("productGrid");
+const productSearchInput = document.getElementById("productSearchInput");
+const productCount = document.getElementById("productCount");
+const noProductFound = document.getElementById("noProductFound");
+const categoryList = document.querySelector(".category-list");
+const categoryButtonsStatic = Array.from(document.querySelectorAll(".category-btn"));
 
-    const categoryButtons = Array.from(
-        document.querySelectorAll(".category-btn")
-    );
+const cartItems = document.getElementById("cartItems");
+const emptyCart = document.getElementById("emptyCart");
+const subtotalAmount = document.getElementById("subtotalAmount");
+const totalItems = document.getElementById("totalItems");
+const discountAmount = document.getElementById("discountAmount");
+const grandTotal = document.getElementById("grandTotal");
+const discountRow = document.getElementById("discountRow");
+const cancelTransactionBtn = document.getElementById("cancelTransactionBtn");
+const paymentBtn = document.getElementById("paymentBtn");
+const barcodeInput = document.getElementById("barcodeInput");
+const transactionNumber = document.getElementById("transactionNumber");
+const addCustomerBtn = document.getElementById("addCustomerBtn");
+const customerSelect = document.getElementById("customerSelect");
 
-    const productSearchInput =
-        document.getElementById("productSearchInput");
+const paymentModal = document.getElementById("paymentModal");
+const closePaymentModal = document.getElementById("closePaymentModal");
+const cancelPaymentBtn = document.getElementById("cancelPaymentBtn");
+const paymentTotalAmount = document.getElementById("paymentTotalAmount");
+const paymentMethods = Array.from(document.querySelectorAll(".payment-method"));
+const cashPaymentSection = document.getElementById("cashPaymentSection");
+const nonCashSection = document.getElementById("nonCashSection");
+const cashReceived = document.getElementById("cashReceived");
+const paymentChangeBox = document.getElementById("paymentChangeBox");
+const paymentChange = document.getElementById("paymentChange");
+const quickCashButtons = Array.from(document.querySelectorAll(".quick-cash-btn"));
+const nonCashIcon = document.getElementById("nonCashIcon");
+const nonCashTitle = document.getElementById("nonCashTitle");
+const nonCashDescription = document.getElementById("nonCashDescription");
+const paymentNote = document.getElementById("paymentNote");
+const confirmPaymentBtn = document.getElementById("confirmPaymentBtn");
+const paymentContent = document.getElementById("paymentContent");
+const paymentSuccess = document.getElementById("paymentSuccess");
+const paymentSuccessTotal = document.getElementById("paymentSuccessTotal");
 
-    const productCount =
-        document.getElementById("productCount");
+/* =========================================================
+   UTILITI
+========================================================= */
+function formatRM(value) {
+    return new Intl.NumberFormat("ms-MY", {
+        style: "currency",
+        currency: "MYR",
+        minimumFractionDigits: 2
+    }).format(Number(value) || 0);
+}
 
-    const noProductFound =
-        document.getElementById("noProductFound");
+function normalizeText(value) {
+    return String(value ?? "").toLowerCase().trim();
+}
 
+function escapeHTML(value) {
+    return String(value ?? "")
+        .replaceAll("&", "&amp;")
+        .replaceAll("<", "&lt;")
+        .replaceAll(">", "&gt;")
+        .replaceAll('"', "&quot;")
+        .replaceAll("'", "&#039;");
+}
 
-    /* CART */
+function showMessage(message) {
+    window.alert(message);
+}
 
-    const cartItems =
-        document.getElementById("cartItems");
+function setBusy(button, busy, text = "") {
+    if (!button) return;
+    button.disabled = busy;
+    if (text) button.dataset.originalText = button.textContent;
+    if (busy && text) button.textContent = text;
+    if (!busy && button.dataset.originalText) {
+        button.textContent = button.dataset.originalText;
+        delete button.dataset.originalText;
+    }
+}
 
-    const emptyCart =
-        document.getElementById("emptyCart");
+function makeReceiptNo() {
+    const d = new Date();
+    const pad = n => String(n).padStart(2, "0");
+    const random = Math.random().toString(36).slice(2, 7).toUpperCase();
+    return `POS-${d.getFullYear()}${pad(d.getMonth()+1)}${pad(d.getDate())}-${pad(d.getHours())}${pad(d.getMinutes())}${pad(d.getSeconds())}-${random}`;
+}
 
-    const subtotalAmount =
-        document.getElementById("subtotalAmount");
+function displayReceiptNo(no) {
+    return "#" + String(no).slice(-3);
+}
 
-    const totalItems =
-        document.getElementById("totalItems");
+/* =========================================================
+   SUPABASE CHECK
+========================================================= */
+function requireDB() {
+    if (!db) {
+        showMessage("Supabase belum disambungkan. Pastikan js/config.js dimuat sebelum POS.");
+        return false;
+    }
+    return true;
+}
 
-    const discountAmount =
-        document.getElementById("discountAmount");
+/* =========================================================
+   LOAD PRODUK DARI SUPABASE
+========================================================= */
+async function loadProduk() {
+    if (!requireDB()) return;
 
-    const grandTotal =
-        document.getElementById("grandTotal");
+    const { data, error } = await db
+        .from("produk")
+        .select("id,kod_produk,nama_produk,kategori,harga_jual,stok,barcode,status")
+        .eq("status", "AKTIF")
+        .order("nama_produk");
 
-    const discountRow =
-        document.getElementById("discountRow");
-
-    const cancelTransactionBtn =
-        document.getElementById("cancelTransactionBtn");
-
-    const paymentBtn =
-        document.getElementById("paymentBtn");
-
-    const barcodeInput =
-        document.getElementById("barcodeInput");
-
-
-    /* TRANSACTION */
-
-    const transactionNumber =
-        document.getElementById("transactionNumber");
-
-
-    /* CUSTOMER */
-
-    const addCustomerBtn =
-        document.getElementById("addCustomerBtn");
-
-    const customerSelect =
-        document.getElementById("customerSelect");
-
-
-    /* PAYMENT */
-
-    const paymentModal =
-        document.getElementById("paymentModal");
-
-    const closePaymentModal =
-        document.getElementById("closePaymentModal");
-
-    const cancelPaymentBtn =
-        document.getElementById("cancelPaymentBtn");
-
-    const paymentTotalAmount =
-        document.getElementById("paymentTotalAmount");
-
-    const paymentMethods = Array.from(
-        document.querySelectorAll(".payment-method")
-    );
-
-    const cashPaymentSection =
-        document.getElementById("cashPaymentSection");
-
-    const nonCashSection =
-        document.getElementById("nonCashSection");
-
-    const cashReceived =
-        document.getElementById("cashReceived");
-
-    const paymentChangeBox =
-        document.getElementById("paymentChangeBox");
-
-    const paymentChange =
-        document.getElementById("paymentChange");
-
-    const exactCashBtn =
-        document.getElementById("exactCashBtn");
-
-    const quickCashButtons = Array.from(
-        document.querySelectorAll(".quick-cash-btn")
-    );
-
-    const nonCashIcon =
-        document.getElementById("nonCashIcon");
-
-    const nonCashTitle =
-        document.getElementById("nonCashTitle");
-
-    const nonCashDescription =
-        document.getElementById("nonCashDescription");
-
-    const paymentNote =
-        document.getElementById("paymentNote");
-
-    const confirmPaymentBtn =
-        document.getElementById("confirmPaymentBtn");
-
-    const paymentContent =
-        document.getElementById("paymentContent");
-
-    const paymentSuccess =
-        document.getElementById("paymentSuccess");
-
-    const paymentSuccessTotal =
-        document.getElementById("paymentSuccessTotal");
-
-
-    /* =====================================================
-       DATA POS
-    ===================================================== */
-
-    let cart = [];
-
-    let activeCategory = "semua";
-
-    let discount = 0;
-
-    let selectedPaymentMethod = "cash";
-
-    let currentTransaction = 1;
-
-
-    /* =====================================================
-       FORMAT RM
-    ===================================================== */
-
-    function formatRM(value) {
-
-        const amount = Number(value) || 0;
-
-        return new Intl.NumberFormat(
-            "ms-MY",
-            {
-                style: "currency",
-                currency: "MYR",
-                minimumFractionDigits: 2
-            }
-        ).format(amount);
-
+    if (error) {
+        console.error("LOAD PRODUK:", error);
+        showMessage("Gagal memuat produk dari Supabase.\n\n" + error.message);
+        return;
     }
 
+    semuaProduk = (data || []).map(p => ({
+        id: String(p.id),
+        category: p.kategori || "Lain-lain",
+        name: p.nama_produk || "Tanpa Nama",
+        code: p.kod_produk || "-",
+        barcode: p.barcode || "",
+        price: Number(p.harga_jual) || 0,
+        stock: Number(p.stok) || 0
+    }));
 
-    /* =====================================================
-       NORMALIZE TEXT
-    ===================================================== */
+    renderCategories();
+    renderProducts();
+    filterProducts();
+}
 
-    function normalizeText(value) {
+/* =========================================================
+   LOAD PELANGGAN DARI SUPABASE
+========================================================= */
+async function loadPelanggan() {
+    if (!requireDB()) return;
 
-        return String(value || "")
-            .toLowerCase()
-            .trim();
+    const { data, error } = await db
+        .from("pelanggan")
+        .select("id,nama_pelanggan,no_telefon,alamat")
+        .order("nama_pelanggan");
 
+    if (error) {
+        console.error("LOAD PELANGGAN:", error);
+        showMessage("Gagal memuat pelanggan.\n\n" + error.message);
+        return;
     }
 
-
-    /* =====================================================
-       GET PRODUCT FROM CARD
-    ===================================================== */
-
-    function getProductFromCard(card) {
-
-        return {
-            id: card.dataset.id,
-            category: card.dataset.category,
-            name: card.dataset.name,
-            code: card.dataset.code,
-            barcode: card.dataset.barcode,
-            price: Number(card.dataset.price),
-            stock: Number(card.dataset.stock)
-        };
-
-    }
-
-
-    /* =====================================================
-       CALCULATE TOTALS
-    ===================================================== */
-
-    function calculateTotals() {
-
-        const subtotal = cart.reduce(
-            (total, item) => {
-                return total + (item.price * item.qty);
-            },
-            0
-        );
-
-
-        const itemCount = cart.reduce(
-            (total, item) => {
-                return total + item.qty;
-            },
-            0
-        );
-
-
-        const safeDiscount = Math.min(
-            Math.max(discount, 0),
-            subtotal
-        );
-
-
-        const total = Math.max(
-            subtotal - safeDiscount,
-            0
-        );
-
-
-        return {
-            subtotal,
-            itemCount,
-            discount: safeDiscount,
-            total
-        };
-
-    }
-
-
-    /* =====================================================
-       RENDER CART
-    ===================================================== */
-
-    function renderCart() {
-
-        /* -----------------------------------------
-           Kosongkan item yang dijana sebelum ini
-        ----------------------------------------- */
-
-        cartItems
-            .querySelectorAll(".cart-item")
-            .forEach(item => item.remove());
-
-
-        /* -----------------------------------------
-           CART KOSONG
-        ----------------------------------------- */
-
-        if (cart.length === 0) {
-
-            emptyCart.style.display = "flex";
-
-        } else {
-
-            emptyCart.style.display = "none";
-
-        }
-
-
-        /* -----------------------------------------
-           CART PRODUCTS
-        ----------------------------------------- */
-
-        cart.forEach(product => {
-
-            const item = document.createElement("div");
-
-            item.className = "cart-item";
-
-            item.dataset.id = product.id;
-
-
-            /* PRODUCT */
-
-            const productBox =
-                document.createElement("div");
-
-            productBox.className = "cart-product";
-
-
-            const productName =
-                document.createElement("div");
-
-            productName.className =
-                "cart-product-name";
-
-            productName.textContent =
-                product.name;
-
-
-            const productCode =
-                document.createElement("div");
-
-            productCode.className =
-                "cart-product-code";
-
-            productCode.textContent =
-                product.code;
-
-
-            productBox.appendChild(productName);
-
-            productBox.appendChild(productCode);
-
-
-            /* PRICE */
-
-            const price =
-                document.createElement("div");
-
-            price.className = "cart-price";
-
-            price.textContent =
-                formatRM(product.price);
-
-
-            /* QUANTITY */
-
-            const qtyControl =
-                document.createElement("div");
-
-            qtyControl.className =
-                "qty-control";
-
-
-            const minusBtn =
-                document.createElement("button");
-
-            minusBtn.type = "button";
-
-            minusBtn.className =
-                "qty-btn qty-minus";
-
-            minusBtn.dataset.id =
-                product.id;
-
-            minusBtn.textContent = "−";
-
-            minusBtn.setAttribute(
-                "aria-label",
-                "Kurangkan kuantiti " + product.name
-            );
-
-
-            const qtyValue =
-                document.createElement("span");
-
-            qtyValue.className =
-                "qty-value";
-
-            qtyValue.textContent =
-                product.qty;
-
-
-            const plusBtn =
-                document.createElement("button");
-
-            plusBtn.type = "button";
-
-            plusBtn.className =
-                "qty-btn qty-plus";
-
-            plusBtn.dataset.id =
-                product.id;
-
-            plusBtn.textContent = "+";
-
-            plusBtn.setAttribute(
-                "aria-label",
-                "Tambah kuantiti " + product.name
-            );
-
-
-            qtyControl.appendChild(minusBtn);
-
-            qtyControl.appendChild(qtyValue);
-
-            qtyControl.appendChild(plusBtn);
-
-
-            /* TOTAL */
-
-            const itemTotal =
-                document.createElement("div");
-
-            itemTotal.className =
-                "cart-item-total";
-
-            itemTotal.textContent =
-                formatRM(
-                    product.price *
-                    product.qty
-                );
-
-
-            /* APPEND */
-
-            item.appendChild(productBox);
-
-            item.appendChild(price);
-
-            item.appendChild(qtyControl);
-
-            item.appendChild(itemTotal);
-
-
-            cartItems.appendChild(item);
-
-        });
-
-
-        updateSummary();
-
-    }
-
-
-    /* =====================================================
-       UPDATE SUMMARY
-    ===================================================== */
-
-    function updateSummary() {
-
-        const totals =
-            calculateTotals();
-
-
-        subtotalAmount.textContent =
-            formatRM(totals.subtotal);
-
-
-        totalItems.textContent =
-            totals.itemCount;
-
-
-        discountAmount.textContent =
-            formatRM(totals.discount);
-
-
-        grandTotal.textContent =
-            formatRM(totals.total);
-
-
-        paymentBtn.disabled =
-            cart.length === 0 ||
-            totals.total <= 0;
-
-    }
-
-
-    /* =====================================================
-       ADD PRODUCT
-    ===================================================== */
-
-    function addProduct(product) {
-
-        if (!product) {
-            return;
-        }
-
-
-        if (product.stock <= 0) {
-
-            showMessage(
-                "Stok produk ini telah habis."
-            );
-
-            return;
-
-        }
-
-
-        const existing =
-            cart.find(
-                item => item.id === product.id
-            );
-
-
-        if (existing) {
-
-            if (existing.qty >= existing.stock) {
-
-                showMessage(
-                    "Kuantiti telah mencapai baki stok."
-                );
-
-                return;
-
-            }
-
-
-            existing.qty++;
-
-        } else {
-
-            cart.push({
-                ...product,
-                qty: 1
-            });
-
-        }
-
-
-        renderCart();
-
-    }
-
-
-    /* =====================================================
-       PRODUCT CARD CLICK
-    ===================================================== */
-
-    productCards.forEach(card => {
-
-        card.addEventListener(
-            "click",
-            function () {
-
-                const product =
-                    getProductFromCard(card);
-
-
-                if (product.stock <= 0) {
-                    return;
-                }
-
-
-                addProduct(product);
-
-            }
-        );
-
+    semuaPelanggan = data || [];
+    renderCustomers();
+}
+
+function renderCustomers() {
+    const current = customerSelect.value;
+    customerSelect.innerHTML = `<option value="">Walk-in Customer</option>`;
+
+    semuaPelanggan.forEach(p => {
+        const option = document.createElement("option");
+        option.value = String(p.id);
+        option.textContent = p.nama_pelanggan || "Tanpa Nama";
+        customerSelect.appendChild(option);
     });
 
-
-    /* =====================================================
-       CART + / -
-       EVENT DELEGATION
-    ===================================================== */
-
-    cartItems.addEventListener(
-        "click",
-        function (event) {
-
-            const plusBtn =
-                event.target.closest(".qty-plus");
-
-            const minusBtn =
-                event.target.closest(".qty-minus");
-
-
-            /* PLUS */
-
-            if (plusBtn) {
-
-                const id =
-                    plusBtn.dataset.id;
-
-                const product =
-                    cart.find(
-                        item => item.id === id
-                    );
-
-
-                if (!product) {
-                    return;
-                }
-
-
-                if (product.qty >= product.stock) {
-
-                    showMessage(
-                        "Kuantiti telah mencapai baki stok."
-                    );
-
-                    return;
-
-                }
-
-
-                product.qty++;
-
-                renderCart();
-
-                return;
-
-            }
-
-
-            /* MINUS */
-
-            if (minusBtn) {
-
-                const id =
-                    minusBtn.dataset.id;
-
-                const product =
-                    cart.find(
-                        item => item.id === id
-                    );
-
-
-                if (!product) {
-                    return;
-                }
-
-
-                product.qty--;
-
-
-                /*
-                   Bila qty jadi 0,
-                   terus buang daripada troli.
-                */
-
-                if (product.qty <= 0) {
-
-                    cart =
-                        cart.filter(
-                            item => item.id !== id
-                        );
-
-                }
-
-
-                renderCart();
-
-            }
-
-        }
-    );
-
-
-    /* =====================================================
-       FILTER PRODUCT
-    ===================================================== */
-
-    function filterProducts() {
-
-        const keyword =
-            normalizeText(
-                productSearchInput.value
-            );
-
-
-        let visibleCount = 0;
-
-
-        productCards.forEach(card => {
-
-            const category =
-                normalizeText(
-                    card.dataset.category
-                );
-
-            const name =
-                normalizeText(
-                    card.dataset.name
-                );
-
-            const code =
-                normalizeText(
-                    card.dataset.code
-                );
-
-            const barcode =
-                normalizeText(
-                    card.dataset.barcode
-                );
-
-
-            const categoryMatch =
-                activeCategory === "semua" ||
-                category === activeCategory;
-
-
-            const keywordMatch =
-                keyword === "" ||
-                name.includes(keyword) ||
-                code.includes(keyword) ||
-                barcode.includes(keyword);
-
-
-            const visible =
-                categoryMatch &&
-                keywordMatch;
-
-
-            if (visible) {
-
-                card.style.display = "";
-
-                visibleCount++;
-
-            } else {
-
-                card.style.display = "none";
-
-            }
-
-        });
-
-
-        productCount.textContent =
-            visibleCount +
-            (
-                visibleCount === 1
-                    ? " Produk"
-                    : " Produk"
-            );
-
-
-        if (visibleCount === 0) {
-
-            noProductFound.classList.add(
-                "show"
-            );
-
-            productGrid.style.display =
-                "none";
-
-        } else {
-
-            noProductFound.classList.remove(
-                "show"
-            );
-
-            productGrid.style.display =
-                "grid";
-
-        }
-
+    if (current && semuaPelanggan.some(p => String(p.id) === current)) {
+        customerSelect.value = current;
+    } else {
+        customerSelect.value = "";
     }
+}
 
+/* =========================================================
+   PRODUK CARD
+========================================================= */
+function renderCategories() {
+    if (!categoryList) return;
 
-    /* =====================================================
-       CATEGORY FILTER
-    ===================================================== */
+    const categories = [...new Set(
+        semuaProduk
+            .map(p => String(p.category || "Lain-lain").trim())
+            .filter(Boolean)
+    )].sort((a, b) => a.localeCompare(b, "ms"));
 
-    categoryButtons.forEach(button => {
+    categoryList.innerHTML = "";
 
-        button.addEventListener(
-            "click",
-            function () {
+    const allBtn = document.createElement("button");
+    allBtn.type = "button";
+    allBtn.className = "category-btn active";
+    allBtn.dataset.category = "semua";
+    allBtn.textContent = "Semua";
+    categoryList.appendChild(allBtn);
 
-                categoryButtons.forEach(btn => {
-
-                    btn.classList.remove(
-                        "active"
-                    );
-
-                });
-
-
-                button.classList.add(
-                    "active"
-                );
-
-
-                activeCategory =
-                    normalizeText(
-                        button.dataset.category
-                    );
-
-
-                filterProducts();
-
-            }
-        );
-
+    categories.forEach(category => {
+        const btn = document.createElement("button");
+        btn.type = "button";
+        btn.className = "category-btn";
+        btn.dataset.category = normalizeText(category);
+        btn.textContent = category;
+        categoryList.appendChild(btn);
     });
+}
 
+function renderProducts() {
+    if (!productGrid) return;
 
-    /* =====================================================
-       SEARCH
-    ===================================================== */
+    productGrid.innerHTML = "";
 
-    productSearchInput.addEventListener(
-        "input",
-        filterProducts
-    );
+    semuaProduk.forEach(product => {
+        const card = document.createElement("article");
+        card.className = "product-card" + (product.stock <= 0 ? " out-of-stock" : "");
+        card.dataset.id = product.id;
+        card.dataset.category = normalizeText(product.category);
+        card.dataset.name = product.name;
+        card.dataset.code = product.code;
+        card.dataset.barcode = product.barcode;
+        card.dataset.price = product.price;
+        card.dataset.stock = product.stock;
 
+        const stockClass = product.stock > 0 ? "stock-ok" : "stock-out";
+        const stockText = product.stock > 0 ? `STOK ${product.stock}` : "STOK HABIS";
+        const icon = product.stock > 0 ? "🔩" : "⚠️";
 
-    /* =====================================================
-       BARCODE
-    ===================================================== */
+        card.innerHTML = `
+            <div class="product-image">
+                <div class="product-placeholder">
+                    <div class="product-placeholder-icon">${icon}</div>
+                    <div class="product-placeholder-text">Sparepart</div>
+                </div>
+                <span class="stock-badge ${stockClass}">${stockText}</span>
+            </div>
+            <div class="product-info">
+                <div class="product-category-name">${escapeHTML(product.category)}</div>
+                <div class="product-name">${escapeHTML(product.name)}</div>
+                <div class="product-code">${escapeHTML(product.code)}</div>
+                <div class="product-bottom">
+                    <div class="product-price">${formatRM(product.price)}</div>
+                    <div class="product-stock">Baki ${product.stock}</div>
+                </div>
+            </div>
+            <div class="product-add">${product.stock > 0 ? "+ Tambah" : "Stok Habis"}</div>
+        `;
 
-    barcodeInput.addEventListener(
-        "keydown",
-        function (event) {
-
-            if (event.key !== "Enter") {
-                return;
-            }
-
-
-            event.preventDefault();
-
-
-            const barcode =
-                barcodeInput.value.trim();
-
-
-            if (!barcode) {
-                return;
-            }
-
-
-            const card =
-                productCards.find(item => {
-
-                    return (
-                        item.dataset.barcode === barcode ||
-                        normalizeText(
-                            item.dataset.code
-                        ) === normalizeText(
-                            barcode
-                        )
-                    );
-
-                });
-
-
-            if (!card) {
-
-                showMessage(
-                    "Kod barang / barcode tidak dijumpai."
-                );
-
-                barcodeInput.select();
-
-                return;
-
-            }
-
-
-            const product =
-                getProductFromCard(card);
-
-
+        card.addEventListener("click", () => {
             if (product.stock <= 0) {
-
-                showMessage(
-                    "Produk dijumpai tetapi stok telah habis."
-                );
-
-                barcodeInput.select();
-
+                showMessage("Produk ini telah habis stok.");
                 return;
-
             }
-
-
             addProduct(product);
+        });
 
+        productGrid.appendChild(card);
+    });
+}
 
-            barcodeInput.value = "";
+function getVisibleCards() {
+    return Array.from(productGrid.querySelectorAll(".product-card"));
+}
 
+function filterProducts() {
+    const keyword = normalizeText(productSearchInput.value);
+    const cards = getVisibleCards();
+    let visibleCount = 0;
 
-            /*
-               Fokus semula supaya scanner
-               boleh terus scan barang seterusnya.
-            */
+    cards.forEach(card => {
+        const category = normalizeText(card.dataset.category);
+        const name = normalizeText(card.dataset.name);
+        const code = normalizeText(card.dataset.code);
+        const barcode = normalizeText(card.dataset.barcode);
 
-            barcodeInput.focus();
+        const categoryMatch = activeCategory === "semua" || category === activeCategory;
+        const keywordMatch = !keyword || name.includes(keyword) || code.includes(keyword) || barcode.includes(keyword);
+        const visible = categoryMatch && keywordMatch;
 
-        }
-    );
+        card.style.display = visible ? "" : "none";
+        if (visible) visibleCount++;
+    });
 
+    productCount.textContent = `${visibleCount} Produk`;
 
-    /* =====================================================
-       DISCOUNT
-    ===================================================== */
+    if (visibleCount === 0) {
+        noProductFound.classList.add("show");
+        productGrid.style.display = "none";
+    } else {
+        noProductFound.classList.remove("show");
+        productGrid.style.display = "grid";
+    }
+}
 
-    discountRow.addEventListener(
-        "click",
-        function () {
+/* =========================================================
+   CART
+========================================================= */
+function calculateTotals() {
+    const subtotal = cart.reduce((sum, item) => sum + item.price * item.qty, 0);
+    const itemCount = cart.reduce((sum, item) => sum + item.qty, 0);
+    const safeDiscount = Math.min(Math.max(Number(discount) || 0, 0), subtotal);
+    return { subtotal, itemCount, discount: safeDiscount, total: Math.max(subtotal - safeDiscount, 0) };
+}
 
-            if (cart.length === 0) {
-                return;
-            }
+function addProduct(product) {
+    const existing = cart.find(item => String(item.id) === String(product.id));
 
-
-            const totals =
-                calculateTotals();
-
-
-            const value = window.prompt(
-                "Masukkan jumlah diskaun (RM):",
-                discount.toFixed(2)
-            );
-
-
-            if (value === null) {
-                return;
-            }
-
-
-            const newDiscount =
-                Number(value);
-
-
-            if (
-                !Number.isFinite(newDiscount) ||
-                newDiscount < 0
-            ) {
-
-                showMessage(
-                    "Jumlah diskaun tidak sah."
-                );
-
-                return;
-
-            }
-
-
-            discount =
-                Math.min(
-                    newDiscount,
-                    totals.subtotal
-                );
-
-
-            renderCart();
-
-        }
-    );
-
-
-    /* =====================================================
-       CANCEL TRANSACTION
-    ===================================================== */
-
-    cancelTransactionBtn.addEventListener(
-        "click",
-        function () {
-
-            if (cart.length === 0) {
-                return;
-            }
-
-
-            const confirmed =
-                window.confirm(
-                    "Batalkan transaksi semasa?"
-                );
-
-
-            if (!confirmed) {
-                return;
-            }
-
-
-            resetTransaction();
-
-        }
-    );
-
-
-    /* =====================================================
-       PAYMENT MODAL
-    ===================================================== */
-
-    function openPaymentModal() {
-
-        const totals =
-            calculateTotals();
-
-
-        if (
-            cart.length === 0 ||
-            totals.total <= 0
-        ) {
+    if (existing) {
+        if (existing.qty >= existing.stock) {
+            showMessage("Kuantiti telah mencapai baki stok.");
             return;
         }
-
-
-        paymentTotalAmount.textContent =
-            formatRM(totals.total);
-
-
-        paymentSuccessTotal.textContent =
-            formatRM(totals.total);
-
-
-        /* RESET PAYMENT */
-
-        selectedPaymentMethod = "cash";
-
-        cashReceived.value = "";
-
-        paymentNote.value = "";
-
-
-        paymentMethods.forEach(button => {
-
-            button.classList.toggle(
-                "active",
-                button.dataset.method === "cash"
-            );
-
-        });
-
-
-        cashPaymentSection.style.display =
-            "block";
-
-        nonCashSection.classList.remove(
-            "show"
-        );
-
-
-        paymentContent.style.display =
-            "block";
-
-        paymentSuccess.classList.remove(
-            "show"
-        );
-
-
-        paymentChange.textContent =
-            formatRM(0);
-
-        paymentChangeBox.classList.remove(
-            "insufficient"
-        );
-
-
-        confirmPaymentBtn.disabled = true;
-
-
-        paymentModal.classList.add(
-            "show"
-        );
-
-        paymentModal.setAttribute(
-            "aria-hidden",
-            "false"
-        );
-
-
-        document.body.style.overflow =
-            "hidden";
-
-
-        setTimeout(
-            function () {
-                cashReceived.focus();
-            },
-            100
-        );
-
+        existing.qty++;
+    } else {
+        cart.push({ ...product, qty: 1 });
     }
-
-
-    function closePayment() {
-
-        paymentModal.classList.remove(
-            "show"
-        );
-
-        paymentModal.setAttribute(
-            "aria-hidden",
-            "true"
-        );
-
-
-        document.body.style.overflow = "";
-
-    }
-
-
-    paymentBtn.addEventListener(
-        "click",
-        openPaymentModal
-    );
-
-
-    closePaymentModal.addEventListener(
-        "click",
-        closePayment
-    );
-
-
-    cancelPaymentBtn.addEventListener(
-        "click",
-        closePayment
-    );
-
-
-    /* =====================================================
-       CLICK OUTSIDE MODAL
-    ===================================================== */
-
-    paymentModal.addEventListener(
-        "click",
-        function (event) {
-
-            if (event.target === paymentModal) {
-
-                closePayment();
-
-            }
-
-        }
-    );
-
-
-    /* =====================================================
-       ESC TUTUP MODAL
-    ===================================================== */
-
-    document.addEventListener(
-        "keydown",
-        function (event) {
-
-            if (
-                event.key === "Escape" &&
-                paymentModal.classList.contains(
-                    "show"
-                )
-            ) {
-
-                closePayment();
-
-            }
-
-        }
-    );
-
-
-    /* =====================================================
-       PAYMENT METHOD
-    ===================================================== */
-
-    paymentMethods.forEach(button => {
-
-        button.addEventListener(
-            "click",
-            function () {
-
-                selectedPaymentMethod =
-                    button.dataset.method;
-
-
-                paymentMethods.forEach(item => {
-
-                    item.classList.remove(
-                        "active"
-                    );
-
-                });
-
-
-                button.classList.add(
-                    "active"
-                );
-
-
-                if (
-                    selectedPaymentMethod ===
-                    "cash"
-                ) {
-
-                    cashPaymentSection.style.display =
-                        "block";
-
-                    nonCashSection.classList.remove(
-                        "show"
-                    );
-
-
-                    updateCashPayment();
-
-
-                    setTimeout(
-                        function () {
-                            cashReceived.focus();
-                        },
-                        50
-                    );
-
-                } else {
-
-                    cashPaymentSection.style.display =
-                        "none";
-
-                    nonCashSection.classList.add(
-                        "show"
-                    );
-
-
-                    updateNonCashInfo();
-
-
-                    /*
-                       Untuk bukan tunai,
-                       pembayaran boleh disahkan
-                       selepas kaedah dipilih.
-                    */
-
-                    confirmPaymentBtn.disabled =
-                        false;
-
-                }
-
-            }
-        );
-
-    });
-
-
-    /* =====================================================
-       NON CASH INFO
-    ===================================================== */
-
-    function updateNonCashInfo() {
-
-        if (selectedPaymentMethod === "qr") {
-
-            nonCashIcon.textContent = "▦";
-
-            nonCashTitle.textContent =
-                "Pembayaran QR";
-
-            nonCashDescription.textContent =
-                "Pastikan pembayaran QR telah diterima sebelum transaksi disahkan.";
-
-        }
-
-
-        if (selectedPaymentMethod === "card") {
-
-            nonCashIcon.textContent = "💳";
-
-            nonCashTitle.textContent =
-                "Pembayaran Kad";
-
-            nonCashDescription.textContent =
-                "Pastikan transaksi kad telah diluluskan sebelum pembayaran disahkan.";
-
-        }
-
-
-        if (
-            selectedPaymentMethod ===
-            "transfer"
-        ) {
-
-            nonCashIcon.textContent = "🏦";
-
-            nonCashTitle.textContent =
-                "Bank Transfer";
-
-            nonCashDescription.textContent =
-                "Pastikan bayaran telah masuk sebelum transaksi disahkan.";
-
-        }
-
-    }
-
-
-    /* =====================================================
-       CASH CALCULATION
-    ===================================================== */
-
-    function updateCashPayment() {
-
-        const totals =
-            calculateTotals();
-
-
-        const received =
-            Number(
-                cashReceived.value
-            ) || 0;
-
-
-        const balance =
-            received - totals.total;
-
-
-        /*
-           Wang mencukupi
-        */
-
-        if (
-            received >= totals.total &&
-            totals.total > 0
-        ) {
-
-            paymentChange.textContent =
-                formatRM(balance);
-
-
-            paymentChangeBox.classList.remove(
-                "insufficient"
-            );
-
-
-            confirmPaymentBtn.disabled =
-                false;
-
-        } else {
-
-            /*
-               Kalau user belum masukkan wang,
-               baki tunjuk RM0 dahulu.
-            */
-
-            if (received <= 0) {
-
-                paymentChange.textContent =
-                    formatRM(0);
-
-            } else {
-
-                paymentChange.textContent =
-                    "Kurang " +
-                    formatRM(
-                        Math.abs(balance)
-                    );
-
-            }
-
-
-            paymentChangeBox.classList.add(
-                "insufficient"
-            );
-
-
-            confirmPaymentBtn.disabled =
-                true;
-
-        }
-
-    }
-
-
-    cashReceived.addEventListener(
-        "input",
-        updateCashPayment
-    );
-
-
-    /* =====================================================
-       QUICK CASH
-    ===================================================== */
-
-    quickCashButtons.forEach(button => {
-
-        button.addEventListener(
-            "click",
-            function () {
-
-                const cashValue =
-                    button.dataset.cash;
-
-
-                const totals =
-                    calculateTotals();
-
-
-                if (cashValue === "exact") {
-
-                    cashReceived.value =
-                        totals.total.toFixed(2);
-
-                } else {
-
-                    cashReceived.value =
-                        Number(
-                            cashValue
-                        ).toFixed(2);
-
-                }
-
-
-                updateCashPayment();
-
-            }
-        );
-
-    });
-
-
-    /* =====================================================
-       CONFIRM PAYMENT
-    ===================================================== */
-
-    confirmPaymentBtn.addEventListener(
-        "click",
-        function () {
-
-            const totals =
-                calculateTotals();
-
-
-            if (cart.length === 0) {
-                return;
-            }
-
-
-            /* -----------------------------------------
-               DOUBLE CHECK TUNAI
-            ----------------------------------------- */
-
-            if (
-                selectedPaymentMethod ===
-                "cash"
-            ) {
-
-                const received =
-                    Number(
-                        cashReceived.value
-                    ) || 0;
-
-
-                if (
-                    received <
-                    totals.total
-                ) {
-
-                    showMessage(
-                        "Wang diterima tidak mencukupi."
-                    );
-
-                    return;
-
-                }
-
-            }
-
-
-            /*
-               =================================================
-               DI SINI NANTI BOLEH SIMPAN KE SUPABASE
-               =================================================
-
-               Contoh data transaksi:
-
-               const saleData = {
-                   transaction_no:
-                       transactionNumber.textContent,
-
-                   customer:
-                       customerSelect.value,
-
-                   subtotal:
-                       totals.subtotal,
-
-                   discount:
-                       totals.discount,
-
-                   total:
-                       totals.total,
-
-                   payment_method:
-                       selectedPaymentMethod,
-
-                   note:
-                       paymentNote.value.trim(),
-
-                   items:
-                       cart
-               };
-
-               Kemudian boleh:
-
-               await supabase
-                   .from("jualan")
-                   .insert(...)
-
-               Tetapi buat masa sekarang
-               sistem adalah standalone HTML.
-            */
-
-
-            completePayment(
-                totals.total
-            );
-
-        }
-    );
-
-
-    /* =====================================================
-       COMPLETE PAYMENT
-    ===================================================== */
-
-    function completePayment(totalPaid) {
-
-        confirmPaymentBtn.disabled =
-            true;
-
-
-        paymentSuccessTotal.textContent =
-            formatRM(totalPaid);
-
-
-        paymentContent.style.display =
-            "none";
-
-
-        paymentSuccess.classList.add(
-            "show"
-        );
-
-
-        /*
-           Tunggu sekejap supaya juruwang
-           nampak status pembayaran berjaya.
-        */
-
-        setTimeout(
-            function () {
-
-                closePayment();
-
-                resetTransaction();
-
-                incrementTransaction();
-
-            },
-            1600
-        );
-
-    }
-
-
-    /* =====================================================
-       RESET TRANSACTION
-    ===================================================== */
-
-    function resetTransaction() {
-
-        cart = [];
-
-        discount = 0;
-
-
-        customerSelect.value =
-            "walk-in";
-
-
-        barcodeInput.value = "";
-
-        productSearchInput.value = "";
-
-
-        activeCategory =
-            "semua";
-
-
-        categoryButtons.forEach(button => {
-
-            button.classList.toggle(
-                "active",
-                button.dataset.category ===
-                    "semua"
-            );
-
-        });
-
-
-        renderCart();
-
-        filterProducts();
-
-    }
-
-
-    /* =====================================================
-       TRANSACTION NUMBER
-    ===================================================== */
-
-    function incrementTransaction() {
-
-        currentTransaction++;
-
-
-        transactionNumber.textContent =
-            "#" +
-            String(
-                currentTransaction
-            ).padStart(
-                3,
-                "0"
-            );
-
-    }
-
-
-    /* =====================================================
-       ADD CUSTOMER
-       DEMO STANDALONE
-    ===================================================== */
-
-    addCustomerBtn.addEventListener(
-        "click",
-        function () {
-
-            const name =
-                window.prompt(
-                    "Masukkan nama pelanggan:"
-                );
-
-
-            if (!name) {
-                return;
-            }
-
-
-            const cleanName =
-                name.trim();
-
-
-            if (!cleanName) {
-                return;
-            }
-
-
-            const option =
-                document.createElement(
-                    "option"
-                );
-
-
-            option.value =
-                "customer-" +
-                Date.now();
-
-
-            option.textContent =
-                cleanName;
-
-
-            customerSelect.appendChild(
-                option
-            );
-
-
-            customerSelect.value =
-                option.value;
-
-        }
-    );
-
-
-    /* =====================================================
-       SIMPLE MESSAGE
-    ===================================================== */
-
-    function showMessage(message) {
-
-        /*
-           Untuk versi awal gunakan alert.
-           Nanti boleh ditukar kepada toast moden.
-        */
-
-        window.alert(message);
-
-    }
-
-
-    /* =====================================================
-       INITIALIZE
-    ===================================================== */
 
     renderCart();
+}
 
-    filterProducts();
+function renderCart() {
+    cartItems.querySelectorAll(".cart-item").forEach(el => el.remove());
+    emptyCart.style.display = cart.length ? "none" : "flex";
 
+    cart.forEach(product => {
+        const item = document.createElement("div");
+        item.className = "cart-item";
+        item.dataset.id = product.id;
+        item.innerHTML = `
+            <div class="cart-product">
+                <div class="cart-product-name">${escapeHTML(product.name)}</div>
+                <div class="cart-product-code">${escapeHTML(product.code)}</div>
+            </div>
+            <div class="cart-price">${formatRM(product.price)}</div>
+            <div class="qty-control">
+                <button type="button" class="qty-btn qty-minus" data-id="${product.id}">−</button>
+                <span class="qty-value">${product.qty}</span>
+                <button type="button" class="qty-btn qty-plus" data-id="${product.id}">+</button>
+            </div>
+            <div class="cart-item-total">${formatRM(product.price * product.qty)}</div>
+        `;
+        cartItems.appendChild(item);
+    });
+
+    updateSummary();
+}
+
+function updateSummary() {
+    const totals = calculateTotals();
+    subtotalAmount.textContent = formatRM(totals.subtotal);
+    totalItems.textContent = totals.itemCount;
+    discountAmount.textContent = formatRM(totals.discount);
+    grandTotal.textContent = formatRM(totals.total);
+    paymentBtn.disabled = cart.length === 0 || totals.total <= 0;
+}
+
+cartItems.addEventListener("click", event => {
+    const plus = event.target.closest(".qty-plus");
+    const minus = event.target.closest(".qty-minus");
+    const id = (plus || minus)?.dataset.id;
+    if (!id) return;
+
+    const item = cart.find(p => String(p.id) === String(id));
+    if (!item) return;
+
+    if (plus) {
+        if (item.qty >= item.stock) {
+            showMessage("Kuantiti telah mencapai baki stok.");
+            return;
+        }
+        item.qty++;
+    } else {
+        item.qty--;
+        if (item.qty <= 0) cart = cart.filter(p => String(p.id) !== String(id));
+    }
+
+    renderCart();
 });
+
+/* =========================================================
+   CATEGORY + SEARCH + BARCODE
+========================================================= */
+document.addEventListener("click", event => {
+    const btn = event.target.closest(".category-btn");
+    if (!btn) return;
+
+    document.querySelectorAll(".category-btn").forEach(b => b.classList.remove("active"));
+    btn.classList.add("active");
+    activeCategory = normalizeText(btn.dataset.category);
+    filterProducts();
+});
+
+productSearchInput.addEventListener("input", filterProducts);
+
+barcodeInput.addEventListener("keydown", event => {
+    if (event.key !== "Enter") return;
+    event.preventDefault();
+
+    const code = normalizeText(barcodeInput.value);
+    if (!code) return;
+
+    const product = semuaProduk.find(p =>
+        normalizeText(p.barcode) === code || normalizeText(p.code) === code
+    );
+
+    if (!product) {
+        showMessage("Kod barang / barcode tidak dijumpai.");
+        barcodeInput.select();
+        return;
+    }
+
+    if (product.stock <= 0) {
+        showMessage("Produk dijumpai tetapi stok telah habis.");
+        barcodeInput.select();
+        return;
+    }
+
+    addProduct(product);
+    barcodeInput.value = "";
+    barcodeInput.focus();
+});
+
+/* =========================================================
+   DISKAUN + BATAL
+========================================================= */
+discountRow.addEventListener("click", () => {
+    if (!cart.length) return;
+    const totals = calculateTotals();
+    const value = window.prompt("Masukkan jumlah diskaun (RM):", discount.toFixed(2));
+    if (value === null) return;
+
+    const amount = Number(value);
+    if (!Number.isFinite(amount) || amount < 0) {
+        showMessage("Jumlah diskaun tidak sah.");
+        return;
+    }
+
+    discount = Math.min(amount, totals.subtotal);
+    renderCart();
+});
+
+cancelTransactionBtn.addEventListener("click", () => {
+    if (!cart.length) return;
+    if (window.confirm("Batalkan transaksi semasa?")) resetTransaction();
+});
+
+/* =========================================================
+   PAYMENT MODAL
+========================================================= */
+function openPaymentModal() {
+    const totals = calculateTotals();
+    if (!cart.length || totals.total <= 0) return;
+
+    paymentTotalAmount.textContent = formatRM(totals.total);
+    paymentSuccessTotal.textContent = formatRM(totals.total);
+    selectedPaymentMethod = "cash";
+    cashReceived.value = "";
+    paymentNote.value = "";
+
+    paymentMethods.forEach(btn => btn.classList.toggle("active", btn.dataset.method === "cash"));
+    cashPaymentSection.style.display = "block";
+    nonCashSection.classList.remove("show");
+    paymentContent.style.display = "block";
+    paymentSuccess.classList.remove("show");
+    paymentChange.textContent = formatRM(0);
+    paymentChangeBox.classList.remove("insufficient");
+    confirmPaymentBtn.disabled = true;
+
+    paymentModal.classList.add("show");
+    paymentModal.setAttribute("aria-hidden", "false");
+    document.body.style.overflow = "hidden";
+    setTimeout(() => cashReceived.focus(), 100);
+}
+
+function closePayment() {
+    paymentModal.classList.remove("show");
+    paymentModal.setAttribute("aria-hidden", "true");
+    document.body.style.overflow = "";
+}
+
+paymentBtn.addEventListener("click", openPaymentModal);
+closePaymentModal.addEventListener("click", closePayment);
+cancelPaymentBtn.addEventListener("click", closePayment);
+paymentModal.addEventListener("click", e => {
+    if (e.target === paymentModal) closePayment();
+});
+
+document.addEventListener("keydown", e => {
+    if (e.key === "Escape" && paymentModal.classList.contains("show")) closePayment();
+});
+
+paymentMethods.forEach(button => {
+    button.addEventListener("click", () => {
+        selectedPaymentMethod = button.dataset.method;
+        paymentMethods.forEach(btn => btn.classList.toggle("active", btn === button));
+
+        const isCash = selectedPaymentMethod === "cash";
+        cashPaymentSection.style.display = isCash ? "block" : "none";
+        nonCashSection.classList.toggle("show", !isCash);
+
+        if (!isCash) {
+            const config = {
+                qr: ["▦", "Pembayaran QR", "Pastikan bayaran QR telah diterima sebelum mengesahkan transaksi."],
+                card: ["💳", "Pembayaran Kad", "Pastikan bayaran kad telah berjaya sebelum mengesahkan transaksi."],
+                transfer: ["🏦", "Bank Transfer", "Pastikan wang telah diterima sebelum mengesahkan transaksi."]
+            }[selectedPaymentMethod];
+            nonCashIcon.textContent = config[0];
+            nonCashTitle.textContent = config[1];
+            nonCashDescription.textContent = config[2];
+            confirmPaymentBtn.disabled = false;
+        } else {
+            updateCashPayment();
+        }
+    });
+});
+
+function updateCashPayment() {
+    const total = calculateTotals().total;
+    const received = Number(cashReceived.value) || 0;
+    const balance = received - total;
+
+    if (received >= total && total > 0) {
+        paymentChange.textContent = formatRM(balance);
+        paymentChangeBox.classList.remove("insufficient");
+        confirmPaymentBtn.disabled = false;
+    } else {
+        paymentChange.textContent = "Kurang " + formatRM(Math.abs(balance));
+        paymentChangeBox.classList.add("insufficient");
+        confirmPaymentBtn.disabled = true;
+    }
+}
+
+cashReceived.addEventListener("input", updateCashPayment);
+
+quickCashButtons.forEach(button => {
+    button.addEventListener("click", () => {
+        const value = button.dataset.cash;
+        const total = calculateTotals().total;
+        cashReceived.value = value === "exact" ? total.toFixed(2) : Number(value).toFixed(2);
+        updateCashPayment();
+    });
+});
+
+/* =========================================================
+   SIMPAN TRANSAKSI KE SUPABASE
+   Menggunakan RPC atomic: proses_jualan_pos
+========================================================= */
+async function saveSaleToSupabase() {
+    if (!requireDB()) return false;
+
+    const totals = calculateTotals();
+    const noResit = makeReceiptNo();
+    const pelangganId = customerSelect.value ? Number(customerSelect.value) : null;
+
+    const items = cart.map(item => ({
+        produk_id: Number(item.id),
+        kuantiti: Number(item.qty),
+        harga: Number(item.price)
+    }));
+
+    const payload = {
+        p_no_resit: noResit,
+        p_pelanggan_id: pelangganId,
+        p_jumlah: totals.total,
+        p_jenis_bayaran: selectedPaymentMethod,
+        p_catatan: [
+            totals.discount > 0 ? `Diskaun: RM${totals.discount.toFixed(2)}` : "",
+            paymentNote.value.trim()
+        ].filter(Boolean).join(" | "),
+        p_items: items
+    };
+
+    const { data, error } = await db.rpc("proses_jualan_pos", payload);
+
+    if (error) {
+        console.error("SIMPAN JUALAN:", error);
+        showMessage("Transaksi gagal disimpan.\n\n" + error.message);
+        return false;
+    }
+
+    console.log("TRANSAKSI BERJAYA:", data);
+    return true;
+}
+
+confirmPaymentBtn.addEventListener("click", async () => {
+    if (!cart.length) return;
+
+    const totals = calculateTotals();
+
+    if (selectedPaymentMethod === "cash") {
+        const received = Number(cashReceived.value) || 0;
+        if (received < totals.total) {
+            showMessage("Wang diterima tidak mencukupi.");
+            return;
+        }
+    }
+
+    setBusy(confirmPaymentBtn, true, "MENYIMPAN...");
+
+    try {
+        const saved = await saveSaleToSupabase();
+        if (!saved) return;
+
+        await loadProduk();
+        completePayment(totals.total);
+    } finally {
+        if (paymentModal.classList.contains("show")) {
+            setBusy(confirmPaymentBtn, false);
+        }
+    }
+});
+
+function completePayment(totalPaid) {
+    confirmPaymentBtn.disabled = true;
+    paymentSuccessTotal.textContent = formatRM(totalPaid);
+    paymentContent.style.display = "none";
+    paymentSuccess.classList.add("show");
+
+    setTimeout(() => {
+        closePayment();
+        resetTransaction();
+        incrementTransaction();
+    }, 1600);
+}
+
+/* =========================================================
+   RESET
+========================================================= */
+function resetTransaction() {
+    cart = [];
+    discount = 0;
+    customerSelect.value = "";
+    barcodeInput.value = "";
+    productSearchInput.value = "";
+    activeCategory = "semua";
+
+    document.querySelectorAll(".category-btn").forEach(button => {
+        button.classList.toggle("active", button.dataset.category === "semua");
+    });
+
+    renderCart();
+    filterProducts();
+}
+
+function incrementTransaction() {
+    currentTransaction++;
+    transactionNumber.textContent = "#" + String(currentTransaction).padStart(3, "0");
+}
+
+/* =========================================================
+   TAMBAH PELANGGAN TERUS KE SUPABASE
+========================================================= */
+addCustomerBtn.addEventListener("click", async () => {
+    if (!requireDB()) return;
+
+    const name = window.prompt("Masukkan nama pelanggan:");
+    if (!name || !name.trim()) return;
+
+    const phone = window.prompt("No. telefon pelanggan (boleh kosong):", "");
+    const address = window.prompt("Alamat pelanggan (boleh kosong):", "");
+
+    const { data, error } = await db
+        .from("pelanggan")
+        .insert({
+            nama_pelanggan: name.trim(),
+            no_telefon: phone?.trim() || null,
+            alamat: address?.trim() || null
+        })
+        .select("id,nama_pelanggan,no_telefon,alamat")
+        .single();
+
+    if (error) {
+        console.error("TAMBAH PELANGGAN:", error);
+        showMessage("Gagal tambah pelanggan.\n\n" + error.message);
+        return;
+    }
+
+    semuaPelanggan.push(data);
+    semuaPelanggan.sort((a, b) => String(a.nama_pelanggan).localeCompare(String(b.nama_pelanggan), "ms"));
+    renderCustomers();
+    customerSelect.value = String(data.id);
+});
+
+/* =========================================================
+   INIT
+========================================================= */
+async function initPOS() {
+    if (!requireDB()) return;
+
+    renderCart();
+    transactionNumber.textContent = displayReceiptNo(makeReceiptNo());
+
+    await Promise.all([
+        loadProduk(),
+        loadPelanggan()
+    ]);
+
+    barcodeInput.focus();
+}
+
+initPOS();
 </script>
 </body>
 </html>
